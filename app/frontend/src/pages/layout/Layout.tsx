@@ -1,6 +1,6 @@
 import { Outlet, NavLink, Link } from "react-router-dom";
 
-import github from "../../assets/github.svg";
+import padana from "../../assets/padana-white.svg";
 
 import styles from "./Layout.module.css";
 
@@ -14,6 +14,7 @@ const Layout = () => {
             <header className={styles.header} role={"banner"}>
                 <div className={styles.headerContainer}>
                     <Link to="/" className={styles.headerTitleContainer}>
+                        <img src={padana} alt="GitHub logo" className={styles.headerLogo} />
                         <h3 className={styles.headerTitle}>Padana</h3>
                     </Link>
                     <nav>

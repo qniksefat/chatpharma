@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from "react";
 import { Checkbox, Panel, DefaultButton, TextField, SpinButton, Slider } from "@fluentui/react";
-import { SparkleFilled } from "@fluentui/react-icons";
+import padana from "../../assets/padana-black.svg";
 import readNDJSONStream from "ndjson-readablestream";
 
 import styles from "./Chat.module.css";
@@ -313,7 +313,13 @@ const Chat = () => {
                 <div className={styles.chatContainer}>
                     {!lastQuestionRef.current ? (
                         <div className={styles.chatEmptyState}>
-                            <SparkleFilled fontSize={"120px"} primaryFill={"rgba(115, 118, 225, 1)"} aria-hidden="true" aria-label="Chat logo" />
+                            <img 
+                                src={padana} alt="Padana logo" 
+                                className={styles.chatEmptyStateLogo}
+                                width="120px"
+                                height="120px"
+                                aria-hidden="true"
+                            />
                             <h1 className={styles.chatEmptyStateTitle}>ChatPharma</h1>
                             <h2 className={styles.chatEmptyStateSubtitle}>I can help you with drug development or approval processes.</h2>
                             <ExampleList onExampleClicked={onExampleClicked} useGPT4V={useGPT4V} />
