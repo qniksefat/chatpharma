@@ -13,25 +13,28 @@ const Layout = () => {
         <div className={styles.layout}>
             <header className={styles.header} role={"banner"}>
                 <div className={styles.headerContainer}>
-                    <Link to="/" className={styles.headerTitleContainer}>
-                        <img src={padana} alt="GitHub logo" className={styles.headerLogo} />
-                        <h3 className={styles.headerTitle}>Padana</h3>
-                    </Link>
-                    <nav>
-                        <ul className={styles.headerNavList}>
-                            <li>
-                                <NavLink to="/" className={({ isActive }) => (isActive ? styles.headerNavPageLinkActive : styles.headerNavPageLink)}>
-                                    Chat
-                                </NavLink>
-                            </li>
-                            <li className={styles.headerNavLeftMargin}>
-                                <NavLink to="/qa" className={({ isActive }) => (isActive ? styles.headerNavPageLinkActive : styles.headerNavPageLink)}>
-                                    Ask a question
-                                </NavLink>
-                            </li>
-                        </ul>
-                    </nav>
-                    <h4 className={styles.headerRightText}>ChatPharma</h4>
+                    <div className={styles.headerLeft}>
+                        <Link to="/" className={styles.headerTitleContainer}>
+                            <img src={padana} alt="GitHub logo" className={styles.headerLogo} />
+                            <h3 className={styles.headerTitle}>Padana</h3>
+                        </Link>
+                    </div>
+                    <div className={styles.headerRight}>
+                        <nav>
+                            <ul className={styles.headerNavList}>
+                                <li>
+                                    <NavLink to="/" className={({ isActive }) => (isActive ? styles.headerNavPageLinkActive : styles.headerNavPageLink)}>
+                                        Chat
+                                    </NavLink>
+                                </li>
+                                <li className={styles.headerNavLeftMargin}>
+                                    <NavLink to="/qa" className={({ isActive }) => (isActive ? styles.headerNavPageLinkActive : styles.headerNavPageLink)}>
+                                        Ask a question
+                                    </NavLink>
+                                </li>
+                            </ul>
+                        </nav>
+                    </div>
                     {useLogin && <LoginButton />}
                 </div>
             </header>
