@@ -13,7 +13,7 @@ import { useLogin, getToken, isLoggedIn, requireAccessControl } from "../../auth
 import { VectorSettings } from "../../components/VectorSettings";
 import { GPT4VSettings } from "../../components/GPT4VSettings";
 import { UploadFile } from "../../components/UploadFile";
-
+import uuid from "react-uuid";
 import { useMsal } from "@azure/msal-react";
 import { TokenClaimsDisplay } from "../../components/TokenClaimsDisplay";
 
@@ -97,7 +97,8 @@ export function Component(): JSX.Element {
                 messages: [
                     {
                         content: question,
-                        role: "user"
+                        role: "user",
+                        id: uuid(),
                     }
                 ],
                 context: {

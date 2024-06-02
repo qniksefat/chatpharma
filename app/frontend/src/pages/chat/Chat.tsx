@@ -2,6 +2,7 @@ import { useRef, useState, useEffect } from "react";
 import { Checkbox, Panel, DefaultButton, TextField, SpinButton, Slider } from "@fluentui/react";
 import { SparkleFilled } from "@fluentui/react-icons";
 import readNDJSONStream from "ndjson-readablestream";
+import uuid from 'react-uuid';
 
 import styles from "./Chat.module.css";
 
@@ -87,7 +88,11 @@ const Chat = () => {
         });
     };
 
-    const handleAsyncRequest = async (question: string, answers: [string, ChatAppResponse][], responseBody: ReadableStream<any>) => {
+    const handleAsyncRequest = async (
+        question: string,
+        answers: [string, ChatAppResponse][],
+        responseBody: ReadableStream<any>,
+    ) => {
         let answer: string = "";
         let askResponse: ChatAppResponse = {} as ChatAppResponse;
 
@@ -97,7 +102,12 @@ const Chat = () => {
                     answer += newContent;
                     const latestResponse: ChatAppResponse = {
                         ...askResponse,
-                        choices: [{ ...askResponse.choices[0], message: { content: answer, role: askResponse.choices[0].message.role } }]
+                        choices: [{ ...askResponse.choices[0], message: {
+                            content: answer,
+                            role: askResponse.choices[0].message.role,
+                            id : askResponse.choices[0].message.id || uuid(),
+                            date : new Date().toISOString()
+                        } }]
                     };
                     setStreamedAnswers([...answers, [question, latestResponse]]);
                     resolve(null);
@@ -125,14 +135,19 @@ const Chat = () => {
         }
         const fullResponse: ChatAppResponse = {
             ...askResponse,
-            choices: [{ ...askResponse.choices[0], message: { content: answer, role: askResponse.choices[0].message.role } }]
+            choices: [{ ...askResponse.choices[0], message: {
+                content: answer,
+                role: askResponse.choices[0].message.role,
+                id: askResponse.choices[0].message.id || uuid(),
+                date: new Date().toISOString()
+            } }]
         };
         return fullResponse;
     };
 
     const client = useLogin ? useMsal().instance : undefined;
 
-    const makeApiRequest = async (question: string) => {
+    const makeApiRequest = async (question: string, conversation_id?: string) => {
         lastQuestionRef.current = question;
 
         error && setError(undefined);
@@ -144,12 +159,30 @@ const Chat = () => {
 
         try {
             const messages: ResponseMessage[] = answers.flatMap(a => [
-                { content: a[0], role: "user" },
-                { content: a[1].choices[0].message.content, role: "assistant" }
+                { 
+                    content: a[0],
+                    role: "user",
+                    id: uuid(),
+                    date: new Date().toISOString(),
+                },
+                {
+                    content: a[1].choices[0].message.content,
+                    role: "assistant",
+                    id: a[1].choices[0].message.id || uuid(),
+                    date: a[1].choices[0].message.date || new Date().toISOString(),
+                }
             ]);
 
             const request: ChatAppRequest = {
-                messages: [...messages, { content: question, role: "user" }],
+                messages: [...messages, {
+                    content: question,
+                    role: "user",
+                    id: uuid(),
+                    date: new Date().toISOString(),
+                }],
+                id: uuid(),
+                date: new Date().toISOString(),
+                title: "Chat",
                 stream: shouldStream,
                 context: {
                     overrides: {
@@ -179,7 +212,11 @@ const Chat = () => {
                 throw Error("No response body");
             }
             if (shouldStream) {
-                const parsedResponse: ChatAppResponse = await handleAsyncRequest(question, answers, response.body);
+                const parsedResponse: ChatAppResponse = await handleAsyncRequest(
+                    question,
+                    answers,
+                    response.body,
+                );
                 setAnswers([...answers, [question, parsedResponse]]);
             } else {
                 const parsedResponse: ChatAppResponseOrError = await response.json();

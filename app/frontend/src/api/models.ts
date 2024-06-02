@@ -39,6 +39,8 @@ export type ChatAppRequestOverrides = {
 export type ResponseMessage = {
     content: string;
     role: string;
+    id: string;
+    date: string;
 };
 
 export type Thoughts = {
@@ -66,7 +68,13 @@ export type ChatAppResponseOrError = {
 };
 
 export type ChatAppResponse = {
-    choices: ResponseChoice[];
+    id: string,
+    choices: ResponseChoice[],
+    history_metadata: {
+        conversation_id: string,
+        title: string,
+        date: string,
+    }
 };
 
 export type ChatAppRequestContext = {
@@ -78,6 +86,9 @@ export type ChatAppRequest = {
     context?: ChatAppRequestContext;
     stream?: boolean;
     session_state: any;
+    id: string;
+    title: string;
+    date: string;
 };
 
 export type Config = {
@@ -92,3 +103,28 @@ export type Config = {
 export type SimpleAPIResponse = {
     message?: string;
 };
+
+export enum CosmosDBStatus {
+  NotConfigured = 'CosmosDB is not configured',
+  NotWorking = 'CosmosDB is not working',
+  InvalidCredentials = 'CosmosDB has invalid credentials',
+  InvalidDatabase = 'Invalid CosmosDB database name',
+  InvalidContainer = 'Invalid CosmosDB container name',
+  Working = 'CosmosDB is configured and working'
+}
+
+export type CosmosDBHealth = {
+  cosmosDB: boolean
+  status: string
+};
+
+export enum ChatHistoryLoadingState {
+  Loading = 'loading',
+  Success = 'success',
+  Fail = 'fail',
+  NotStarted = 'notStarted'
+};
+
+export type ConversationRequest = {
+  messages: ResponseMessage[]
+}
