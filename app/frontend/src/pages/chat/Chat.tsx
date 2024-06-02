@@ -37,13 +37,13 @@ const Chat = () => {
     const [temperature, setTemperature] = useState<number>(0.3);
     const [minimumRerankerScore, setMinimumRerankerScore] = useState<number>(0);
     const [minimumSearchScore, setMinimumSearchScore] = useState<number>(0);
-    const [retrieveCount, setRetrieveCount] = useState<number>(3);
+    const [retrieveCount, setRetrieveCount] = useState<number>(5);
     const [retrievalMode, setRetrievalMode] = useState<RetrievalMode>(RetrievalMode.Hybrid);
     const [useSemanticRanker, setUseSemanticRanker] = useState<boolean>(true);
     const [shouldStream, setShouldStream] = useState<boolean>(true);
     const [useSemanticCaptions, setUseSemanticCaptions] = useState<boolean>(false);
     const [excludeCategory, setExcludeCategory] = useState<string>("");
-    const [useSuggestFollowupQuestions, setUseSuggestFollowupQuestions] = useState<boolean>(false);
+    const [useSuggestFollowupQuestions, setUseSuggestFollowupQuestions] = useState<boolean>(true);
     const [vectorFieldList, setVectorFieldList] = useState<VectorFieldOptions[]>([VectorFieldOptions.Embedding]);
     const [useOidSecurityFilter, setUseOidSecurityFilter] = useState<boolean>(false);
     const [useGroupsSecurityFilter, setUseGroupsSecurityFilter] = useState<boolean>(false);
