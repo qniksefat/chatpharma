@@ -152,6 +152,26 @@ class ChatReadRetrieveReadApproach(ChatApproach):
 
         query_text = self.get_search_query(chat_completion, original_user_query)
 
+        # STEP 1.5: Generate a brief answer for the question
+        brief_answer_token_limit = 100
+        brief_answer_messages = [
+            {"role": "system", "content": self.brief_answer_content},
+            {"role": "user", "content": original_user_query},
+        ]
+        brief_answer_messages.extend(self.brief_answer_few_shots)
+        
+        chat_completion: ChatCompletion = await self.openai_client.chat.completions.create(
+            messages=brief_answer_messages,
+            model=self.chatgpt_deployment if self.chatgpt_deployment else self.chatgpt_model,
+            temperature=0.0,
+            max_tokens=brief_answer_token_limit,
+            n=1,
+        )
+        
+        brief_answer = self.get_brief_answer(chat_completion)
+
+        query_text = query_text + " " + brief_answer
+
         # STEP 2: Retrieve relevant documents from the search index with the GPT optimized query
 
         # If retrieval mode includes vectors, compute an embedding for the query
