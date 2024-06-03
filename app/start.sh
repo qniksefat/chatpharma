@@ -4,14 +4,6 @@ echo ""
 echo "Loading azd .env file from current environment"
 echo ""
 
-# Load environment variables from .env file if it exists
-if [ -f .env ]; then
-    echo "Loading environment variables from .env file"
-    export $(grep -v '^#' .env | xargs)
-else
-    echo ".env file not found"
-fi
-
 while IFS='=' read -r key value; do
     value=$(echo "$value" | sed 's/^"//' | sed 's/"$//')
     export "$key=$value"
@@ -19,23 +11,10 @@ done <<EOF
 $(azd env get-values)
 EOF
 
-if not command -v azd &> /dev/null; then
-    echo "azd command not found, skipping .env file load"
-else
-    if [ -z "$(azd env list | grep -w true | awk '{print $1}')" ]; then
-        echo "No azd environments found, skipping .env file load"
-    else
-        echo "Loading azd .env file from current environment"
-        while IFS='=' read -r key value; do
-        value=$(echo "$value" | sed 's/^"//' | sed 's/"$//')
-        export "$key=$value"
-        done <<EOF
-$(azd env get-values --no-prompt)
-EOF
-    fi
+if [ $? -ne 0 ]; then
+    echo "Failed to load environment variables from azd environment"
+    exit $?
 fi
-
-
 
 cd ../
 echo 'Creating python virtual environment ".venv"'

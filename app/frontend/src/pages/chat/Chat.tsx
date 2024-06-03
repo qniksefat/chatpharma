@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useContext, useEffect } from "react";
 import { Checkbox, Panel, DefaultButton, TextField, SpinButton, Slider } from "@fluentui/react";
 import padana from "../../assets/padana-black.svg";
 import readNDJSONStream from "ndjson-readablestream";
@@ -14,6 +14,7 @@ import {
     ChatAppResponse,
     ChatAppResponseOrError,
     ChatAppRequest,
+    CosmosDBStatus,
     ResponseMessage,
     VectorFieldOptions,
     GPT4VInput
@@ -23,16 +24,20 @@ import { QuestionInput } from "../../components/QuestionInput";
 import { ExampleList } from "../../components/Example";
 import { UserChatMessage } from "../../components/UserChatMessage";
 import { AnalysisPanel, AnalysisPanelTabs } from "../../components/AnalysisPanel";
+import { AppStateContext } from '../../state/AppProvider'
 import { SettingsButton } from "../../components/SettingsButton";
 import { ClearChatButton } from "../../components/ClearChatButton";
 import { UploadFile } from "../../components/UploadFile";
 import { useLogin, getToken, isLoggedIn, requireAccessControl } from "../../authConfig";
 import { VectorSettings } from "../../components/VectorSettings";
+import { ChatHistoryPanel } from '../../components/ChatHistory/ChatHistoryPanel';
 import { useMsal } from "@azure/msal-react";
 import { TokenClaimsDisplay } from "../../components/TokenClaimsDisplay";
 import { GPT4VSettings } from "../../components/GPT4VSettings";
 
 const Chat = () => {
+    const appStateContext = useContext(AppStateContext)
+
     const [isConfigPanelOpen, setIsConfigPanelOpen] = useState(false);
     const [promptTemplate, setPromptTemplate] = useState<string>("");
     const [temperature, setTemperature] = useState<number>(0.3);
@@ -575,6 +580,8 @@ const Chat = () => {
                     />
                     {useLogin && <TokenClaimsDisplay />}
                 </Panel>
+                {appStateContext?.state.isChatHistoryOpen &&
+            appStateContext?.state.isCosmosDBAvailable?.status !== CosmosDBStatus.NotConfigured && <ChatHistoryPanel />}
             </div>
         </div>
     );
