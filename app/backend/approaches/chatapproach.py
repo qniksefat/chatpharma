@@ -37,7 +37,12 @@ class ChatApproach(Approach, ABC):
     """
 
     brief_answer_content = """Provide a short, accurate, and relevant answer to the question. Ensure the answer is concise and informative. 
-    Do not include any text inside [] or <<>> in the answer.
+    Do not repeat or rephrase the question in the answer. 
+    Do not include any text inside [] or <<>> in the answer. 
+    Do not include any special characters like '+'. 
+    Do not mention any specific dates or years in the answer. 
+    Do not refer user to external sources for the answer. 
+    If you cannot generate a search query, return just the number 0.
     """
     brief_answer_few_shots: list[ChatCompletionMessageParam] = [
         {"role": "user", "content": "What are the most populated cities in the world?"},
