@@ -15,10 +15,11 @@ interface Props {
     onCitationClicked: (filePath: string) => void;
     onThoughtProcessClicked: () => void;
     onSupportingContentClicked: () => void;
-    onFollowupQuestionClicked?: (question: string) => void;
+    onFollowupQuestionClicked?: (question: string, id: string | undefined) => void;
     showFollowupQuestions?: boolean;
     showSpeechOutput?: boolean;
     speechUrl: string | null;
+    conversationId?: string;
 }
 
 export const Answer = ({
@@ -31,7 +32,8 @@ export const Answer = ({
     onFollowupQuestionClicked,
     showFollowupQuestions,
     showSpeechOutput,
-    speechUrl
+    speechUrl,
+    conversationId,
 }: Props) => {
     const followupQuestions = answer.choices[0].context.followup_questions;
     const messageContent = answer.choices[0].message.content;
@@ -92,7 +94,7 @@ export const Answer = ({
                         <span className={styles.followupQuestionLearnMore}>Follow-up questions:</span>
                         {followupQuestions.map((x, i) => {
                             return (
-                                <a key={i} className={styles.followupQuestion} title={x} onClick={() => onFollowupQuestionClicked(x)}>
+                                <a key={i} className={styles.followupQuestion} title={x} onClick={() => onFollowupQuestionClicked(x, conversationId)}>
                                     {`${x}`}
                                 </a>
                             );

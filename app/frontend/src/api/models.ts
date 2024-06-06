@@ -36,6 +36,15 @@ export type ChatAppRequestOverrides = {
     vector_fields: VectorFieldOptions[];
 };
 
+export type UserInfo = {
+  access_token: string
+  expires_on: string
+  id_token: string
+  provider_name: string
+  user_claims: any[]
+  user_id: string
+};
+
 export type ResponseMessage = {
     content: string;
     role: string;

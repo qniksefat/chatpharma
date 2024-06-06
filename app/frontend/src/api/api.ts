@@ -2,7 +2,12 @@ const BACKEND_URI = "";
 
 import { ChatAppResponse, ChatAppResponseOrError, ChatAppRequest, Config, SimpleAPIResponse } from "./models";
 import { useLogin, appServicesToken } from "../authConfig";
-import { CosmosDBHealth, CosmosDBStatus, ResponseMessage, ConversationRequest } from "./models";
+import { 
+    CosmosDBHealth,
+    CosmosDBStatus,
+    ResponseMessage,
+    UserInfo 
+} from "./models";
 import { chatHistorySampleData } from "./../constants/chatHistory";
 
 export function getHeaders(idToken: string | undefined): Record<string, string> {
@@ -24,29 +29,24 @@ export async function configApi(): Promise<Config> {
     return (await response.json()) as Config;
 }
 
-export async function askApi(request: ChatAppRequest, idToken: string | undefined): Promise<ChatAppResponse> {
-    const response = await fetch(`${BACKEND_URI}/ask`, {
-        method: "POST",
-        headers: { ...getHeaders(idToken), "Content-Type": "application/json" },
-        body: JSON.stringify(request)
-    });
-
-    const parsedResponse: ChatAppResponseOrError = await response.json();
-    if (response.status > 299 || !response.ok) {
-        throw Error(parsedResponse.error || "Unknown error");
-    }
-
-    return parsedResponse as ChatAppResponse;
-}
-
 export async function chatApi(request: ChatAppRequest, idToken: string | undefined): Promise<Response> {
     return await fetch(`${BACKEND_URI}/chat`, {
         method: "POST",
-        headers: { ...getHeaders(idToken), "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request)
     });
 }
 
+export async function getUserInfo(): Promise<UserInfo[]> {
+  const response = await fetch('/.auth/me')
+  if (!response.ok) {
+    console.log('No identity provider found. Access to chat will be blocked.')
+    return []
+  }
+
+  const payload = await response.json()
+  return payload
+}
 
 export async function getSpeechApi(text: string): Promise<string | null> {
     return await fetch("/speech", {
@@ -200,40 +200,6 @@ export const historyRead = async (convId: string): Promise<ResponseMessage[]> =>
     .catch(_err => {
       console.error('There was an issue fetching your data.')
       return []
-    })
-  return response
-}
-
-export const historyGenerate = async (
-  options: ConversationRequest,
-  abortSignal: AbortSignal,
-  convId?: string
-): Promise<Response> => {
-  let body
-  if (convId) {
-    body = JSON.stringify({
-      conversation_id: convId,
-      messages: options.messages
-    })
-  } else {
-    body = JSON.stringify({
-      messages: options.messages
-    })
-  }
-  const response = await fetch('/history/generate', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: body,
-    signal: abortSignal
-  })
-    .then(res => {
-      return res
-    })
-    .catch(_err => {
-      console.error('There was an issue fetching your data.')
-      return new Response()
     })
   return response
 }

@@ -36,6 +36,16 @@ class ChatApproach(Approach, ABC):
     If you cannot generate a search query, return just the number 0.
     """
 
+    brief_answer_content = """Provide a short, accurate, and relevant answer to the question. Ensure the answer is concise and informative. 
+    Do not include any text inside [] or <<>> in the answer.
+    """
+    brief_answer_few_shots: list[ChatCompletionMessageParam] = [
+        {"role": "user", "content": "What are the most populated cities in the world?"},
+        {"role": "assistant", "content": "The most populated cities in the world are Tokyo, Delhi, and Shanghai."},
+        {"role": "user", "content": "What are the health plans?"},
+        {"role": "assistant", "content": "Several health plan options are available, including HMO, PPO, and EPO plans, each offering different levels of coverage."},
+    ]
+
     @property
     @abstractmethod
     def system_message_chat_conversation(self) -> str:
@@ -74,6 +84,10 @@ class ChatApproach(Approach, ABC):
             if query_text.strip() != self.NO_RESPONSE:
                 return query_text
         return user_query
+
+    def get_brief_answer(self, chat_completion: ChatCompletion):
+        content = chat_completion.choices[0].message.content
+        return content
 
     def extract_followup_questions(self, content: str):
         return content.split("<<")[0], re.findall(r"<<([^>>]+)>>", content)

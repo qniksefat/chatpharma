@@ -168,10 +168,13 @@ class CosmosConversationClient():
         if self.enable_message_feedback:
             message['feedback'] = ''
 
-        resp = await self.container_client.upsert_item(message)  
+        resp = await self.container_client.upsert_item(message)
+        logger.info(f"the user_id is {user_id}")
+        logger.info(f"create_message: {resp}")
         if resp:
             ## update the parent conversations's updatedAt field with the current message's createdAt datetime value
             conversation = await self.get_conversation(user_id, conversation_id)
+            logger.info(f"conversation: {conversation}")
             if not conversation:
                 return "Conversation not found"
             conversation['updatedAt'] = message['createdAt']
@@ -179,7 +182,7 @@ class CosmosConversationClient():
             return resp
         else:
             return False
-    
+
     async def update_message_feedback(self, user_id, message_id, feedback):
         message = await self.container_client.read_item(item=message_id, partition_key=user_id)
         if message:

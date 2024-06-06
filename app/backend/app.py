@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Union, cast
 
@@ -47,9 +48,7 @@ from quart_cors import cors
 
 from approaches.approach import Approach
 from approaches.chatreadretrieveread import ChatReadRetrieveReadApproach
-from approaches.chatreadretrievereadvision import ChatReadRetrieveReadVisionApproach
 from approaches.retrievethenread import RetrieveThenReadApproach
-from approaches.retrievethenreadvision import RetrieveThenReadVisionApproach
 from config import (
     CONFIG_ASK_APPROACH,
     CONFIG_ASK_VISION_APPROACH,
@@ -167,29 +166,6 @@ async def content_file(path: str, auth_claims: Dict[str, Any]):
     return await send_file(blob_file, mimetype=mime_type, as_attachment=False, attachment_filename=path)
 
 
-@bp.route("/ask", methods=["POST"])
-@authenticated
-async def ask(auth_claims: Dict[str, Any]):
-    if not request.is_json:
-        return jsonify({"error": "request must be json"}), 415
-    request_json = await request.get_json()
-    context = request_json.get("context", {})
-    context["auth_claims"] = auth_claims
-    try:
-        use_gpt4v = context.get("overrides", {}).get("use_gpt4v", False)
-        approach: Approach
-        if use_gpt4v and CONFIG_ASK_VISION_APPROACH in current_app.config:
-            approach = cast(Approach, current_app.config[CONFIG_ASK_VISION_APPROACH])
-        else:
-            approach = cast(Approach, current_app.config[CONFIG_ASK_APPROACH])
-        r = await approach.run(
-            request_json["messages"], context=context, session_state=request_json.get("session_state")
-        )
-        return jsonify(r)
-    except Exception as error:
-        return error_response(error, "/ask")
-
-
 class JSONEncoder(json.JSONEncoder):
     def default(self, o):
         if dataclasses.is_dataclass(o):
@@ -213,8 +189,44 @@ async def chat(auth_claims: Dict[str, Any]):
         return jsonify({"error": "request must be json"}), 415
     request_json = await request.get_json()
     context = request_json.get("context", {})
+
     context["auth_claims"] = auth_claims
+    authenticated_user = get_authenticated_user_details(request_headers=request.headers)
+    user_id = "mrab.m.72@gmail.com"#authenticated_user["user_principal_id"]
+    conversation_id = request_json.get("id", None)
+
     try:
+        cosmos_conversation_client = await get_cosmosdb_client()
+        if not cosmos_conversation_client:
+            raise Exception("CosmosDB is not configured or not working")
+
+        history_metadata = {}
+        if not conversation_id:
+            title = request_json.get("title", "Chat")
+            conversation_dict = await cosmos_conversation_client.create_conversation(
+                user_id=user_id, title=title
+            )
+            conversation_id = conversation_dict["id"]
+            history_metadata["title"] = title
+            history_metadata["date"] = conversation_dict["createdAt"]
+
+        messages = request_json["messages"]
+        if len(messages) > 0 and messages[-1]["role"] == "user":
+            createdMessageValue = await cosmos_conversation_client.create_message(
+                uuid=str(uuid.uuid4()),
+                conversation_id=conversation_id,
+                user_id=user_id,
+                input_message=messages[-1],
+            )
+            if createdMessageValue == "Conversation not found":
+                raise Exception(
+                    "Conversation not found for the given conversation ID: "
+                    + conversation_id
+                    + "."
+                )
+        else:
+            raise Exception("No user message found")
+
         use_gpt4v = context.get("overrides", {}).get("use_gpt4v", False)
         approach: Approach
         if use_gpt4v and CONFIG_CHAT_VISION_APPROACH in current_app.config:
@@ -223,13 +235,14 @@ async def chat(auth_claims: Dict[str, Any]):
             approach = cast(Approach, current_app.config[CONFIG_CHAT_APPROACH])
 
         result = await approach.run(
-            request_json["messages"],
+            messages=request_json["messages"],
             stream=request_json.get("stream", False),
             context=context,
             session_state=request_json.get("session_state"),
         )
         if isinstance(result, dict):
             return jsonify(result)
+
         else:
             response = await make_response(format_as_ndjson(result))
             response.timeout = None  # type: ignore
@@ -237,7 +250,6 @@ async def chat(auth_claims: Dict[str, Any]):
             return response
     except Exception as error:
         return error_response(error, "/chat")
-
 
 # Send MSAL.js settings to the client UI
 @bp.route("/auth_setup", methods=["GET"])
@@ -364,88 +376,6 @@ async def list_uploaded(auth_claims: dict[str, Any]):
     return jsonify(files), 200
 
 
-@bp.route("/history/generate", methods=["POST"])
-@authenticated
-async def add_conversation():
-    if not request.is_json:
-        return jsonify({"error": "request must be json"}), 415
-
-    authenticated_user = get_authenticated_user_details(request_headers=request.headers)
-    user_id = authenticated_user["user_principal_id"]
-    request_json = await request.get_json()
-
-    context = request_json.get("context", {})
-    message = request_json.get("message", {})
-    try:
-        cosmos_conversation_client = get_cosmosdb_client()
-        if not cosmos_conversation_client:
-            raise Exception("CosmosDB is not configured or not working")
-
-        use_gpt4v = context.get("overrides", {}).get("use_gpt4v", False)
-        conversation_id = request_json.get("conversation_id", None)
-
-        ###
-
-        history_metadata = {}
-        if not conversation_id:
-            title = await generate_title(request_json["messages"])
-            conversation_dict = await cosmos_conversation_client.create_conversation(
-                user_id=user_id, title=title
-            )
-            conversation_id = conversation_dict["id"]
-            history_metadata["title"] = title
-            history_metadata["date"] = conversation_dict["createdAt"]
-
-        ## Format the incoming message object in the "chat/completions" messages format
-        ## then write it to the conversation history in cosmos
-        messages = request_json["messages"]
-        if len(messages) > 0 and messages[-1]["role"] == "user":
-            createdMessageValue = await cosmos_conversation_client.create_message(
-                uuid=str(uuid.uuid4()),
-                conversation_id=conversation_id,
-                user_id=user_id,
-                input_message=messages[-1],
-            )
-            if createdMessageValue == "Conversation not found":
-                raise Exception(
-                    "Conversation not found for the given conversation ID: "
-                    + conversation_id
-                    + "."
-                )
-        else:
-            raise Exception("No user message found")
-
-        # Submit request to Chat Completions for response
-        #request_body = await request.get_json()
-        #history_metadata["conversation_id"] = conversation_id
-        #request_body["history_metadata"] = history_metadata
-        #return await conversation_internal(request_body, request.headers)
-
-        ###
-        approach: Approach
-        if use_gpt4v and CONFIG_CHAT_VISION_APPROACH in current_app.config:
-            approach = cast(Approach, current_app.config[CONFIG_CHAT_VISION_APPROACH])
-        else:
-            approach = cast(Approach, current_app.config[CONFIG_CHAT_APPROACH])
-
-        result = await approach.run(
-            request_json["messages"],
-            stream=request_json.get("stream", False),
-            context=context,
-            session_state=request_json.get("session_state"),
-        )
-        if isinstance(result, dict):
-            return jsonify(result)
-        else:
-            response = await make_response(format_as_ndjson(result))
-            response.timeout = None  # type: ignore
-            response.mimetype = "application/json-lines"
-            return response
-    except Exception as error:
-        return error_response(error, "/chat")
-
-        # make sure cosmos is configured
-        # check for the conversation_id, if the conversation is not set, we will create a n
 @bp.route("/history/update", methods=["POST"])
 async def update_conversation():
     authenticated_user = get_authenticated_user_details(request_headers=request.headers)
@@ -457,7 +387,7 @@ async def update_conversation():
 
     try:
         # make sure cosmos is configured
-        cosmos_conversation_client = get_cosmosdb_client()
+        cosmos_conversation_client = await get_cosmosdb_client()
         if not cosmos_conversation_client:
             raise Exception("CosmosDB is not configured or not working")
 
@@ -590,8 +520,8 @@ async def delete_conversation():
 async def list_conversations():
     offset = request.args.get("offset", 0)
     authenticated_user = get_authenticated_user_details(request_headers=request.headers)
-    user_id = authenticated_user["user_principal_id"]
-
+    user_id = "mrab.m.72@gmail.com" #authenticated_user["user_principal_id"]
+    logging.info(f"Listing conversations for user {user_id}")
     ## make sure cosmos is configured
     cosmos_conversation_client = await get_cosmosdb_client()
     if not cosmos_conversation_client:
@@ -613,7 +543,7 @@ async def list_conversations():
 async def get_conversation():
     authenticated_user = get_authenticated_user_details(request_headers=request.headers)
     user_id = authenticated_user["user_principal_id"]
-
+    logging.info(f"Reading conversation for user {user_id}")
     ## check request for conversation_id
     request_json = await request.get_json()
     conversation_id = request_json.get("conversation_id", None)
@@ -877,7 +807,7 @@ async def setup_clients():
     AZURE_SPEECH_SERVICE_LOCATION = os.getenv("AZURE_SPEECH_SERVICE_LOCATION")
     AZURE_SPEECH_VOICE = os.getenv("AZURE_SPEECH_VOICE", "en-US-AndrewMultilingualNeural")
     
-    cosmosdb_client = await get_cosmosdb_client()
+    _ = await get_cosmosdb_client()
     USE_GPT4V = os.getenv("USE_GPT4V", "").lower() == "true"
     USE_USER_UPLOAD = os.getenv("USE_USER_UPLOAD", "").lower() == "true"
     USE_SPEECH_INPUT_BROWSER = os.getenv("USE_SPEECH_INPUT_BROWSER", "").lower() == "true"
@@ -978,7 +908,6 @@ async def setup_clients():
 
     if OPENAI_HOST.startswith("azure"):
         token_provider = get_bearer_token_provider(azure_credential, "https://cognitiveservices.azure.com/.default")
-
         if OPENAI_HOST == "azure_custom":
             endpoint = os.environ["AZURE_OPENAI_CUSTOM_URL"]
         else:
@@ -1045,51 +974,6 @@ async def setup_clients():
         query_language=AZURE_SEARCH_QUERY_LANGUAGE,
         query_speller=AZURE_SEARCH_QUERY_SPELLER,
     )
-
-    if USE_GPT4V:
-        current_app.logger.info("USE_GPT4V is true, setting up GPT4V approach")
-        if not AZURE_OPENAI_GPT4V_MODEL:
-            raise ValueError("AZURE_OPENAI_GPT4V_MODEL must be set when USE_GPT4V is true")
-        token_provider = get_bearer_token_provider(azure_credential, "https://cognitiveservices.azure.com/.default")
-
-        current_app.config[CONFIG_ASK_VISION_APPROACH] = RetrieveThenReadVisionApproach(
-            search_client=search_client,
-            openai_client=openai_client,
-            blob_container_client=blob_container_client,
-            auth_helper=auth_helper,
-            vision_endpoint=AZURE_VISION_ENDPOINT,
-            vision_token_provider=token_provider,
-            gpt4v_deployment=AZURE_OPENAI_GPT4V_DEPLOYMENT,
-            gpt4v_model=AZURE_OPENAI_GPT4V_MODEL,
-            embedding_model=OPENAI_EMB_MODEL,
-            embedding_deployment=AZURE_OPENAI_EMB_DEPLOYMENT,
-            embedding_dimensions=OPENAI_EMB_DIMENSIONS,
-            sourcepage_field=KB_FIELDS_SOURCEPAGE,
-            content_field=KB_FIELDS_CONTENT,
-            query_language=AZURE_SEARCH_QUERY_LANGUAGE,
-            query_speller=AZURE_SEARCH_QUERY_SPELLER,
-        )
-
-        current_app.config[CONFIG_CHAT_VISION_APPROACH] = ChatReadRetrieveReadVisionApproach(
-            search_client=search_client,
-            openai_client=openai_client,
-            blob_container_client=blob_container_client,
-            auth_helper=auth_helper,
-            vision_endpoint=AZURE_VISION_ENDPOINT,
-            vision_token_provider=token_provider,
-            chatgpt_model=OPENAI_CHATGPT_MODEL,
-            chatgpt_deployment=AZURE_OPENAI_CHATGPT_DEPLOYMENT,
-            gpt4v_deployment=AZURE_OPENAI_GPT4V_DEPLOYMENT,
-            gpt4v_model=AZURE_OPENAI_GPT4V_MODEL,
-            embedding_model=OPENAI_EMB_MODEL,
-            embedding_deployment=AZURE_OPENAI_EMB_DEPLOYMENT,
-            embedding_dimensions=OPENAI_EMB_DIMENSIONS,
-            sourcepage_field=KB_FIELDS_SOURCEPAGE,
-            content_field=KB_FIELDS_CONTENT,
-            query_language=AZURE_SEARCH_QUERY_LANGUAGE,
-            query_speller=AZURE_SEARCH_QUERY_SPELLER,
-        )
-
 
 @bp.after_app_serving
 async def close_clients():

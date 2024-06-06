@@ -1,8 +1,9 @@
-import { useRef, useState, useContext, useEffect } from "react";
+import { useRef, useState, useContext, useEffect, useLayoutEffect } from "react";
 import { Checkbox, Panel, DefaultButton, TextField, SpinButton, Slider } from "@fluentui/react";
 import padana from "../../assets/padana-black.svg";
 import readNDJSONStream from "ndjson-readablestream";
 import uuid from 'react-uuid';
+import { isEmpty } from 'lodash';
 
 import styles from "./Chat.module.css";
 
@@ -10,6 +11,7 @@ import {
     chatApi,
     configApi,
     getSpeechApi,
+    historyUpdate,
     RetrievalMode,
     ChatAppResponse,
     ChatAppResponseOrError,
@@ -17,7 +19,8 @@ import {
     CosmosDBStatus,
     ResponseMessage,
     VectorFieldOptions,
-    GPT4VInput
+    GPT4VInput,
+    ResponseChoice
 } from "../../api";
 import { Answer, AnswerError, AnswerLoading } from "../../components/Answer";
 import { QuestionInput } from "../../components/QuestionInput";
@@ -35,6 +38,15 @@ import { useMsal } from "@azure/msal-react";
 import { TokenClaimsDisplay } from "../../components/TokenClaimsDisplay";
 import { GPT4VSettings } from "../../components/GPT4VSettings";
 
+const enum messageStatus {
+  NotRunning = 'Not Running',
+  Processing = 'Processing',
+  Done = 'Done'
+}
+
+const [ASSISTANT, TOOL, ERROR] = ['assistant', 'tool', 'error']
+const NO_CONTENT_ERROR = 'No content in messages object.'
+
 const Chat = () => {
     const appStateContext = useContext(AppStateContext)
 
@@ -43,13 +55,13 @@ const Chat = () => {
     const [temperature, setTemperature] = useState<number>(0.3);
     const [minimumRerankerScore, setMinimumRerankerScore] = useState<number>(0);
     const [minimumSearchScore, setMinimumSearchScore] = useState<number>(0);
-    const [retrieveCount, setRetrieveCount] = useState<number>(3);
+    const [retrieveCount, setRetrieveCount] = useState<number>(5);
     const [retrievalMode, setRetrievalMode] = useState<RetrievalMode>(RetrievalMode.Hybrid);
     const [useSemanticRanker, setUseSemanticRanker] = useState<boolean>(true);
     const [shouldStream, setShouldStream] = useState<boolean>(true);
     const [useSemanticCaptions, setUseSemanticCaptions] = useState<boolean>(false);
     const [excludeCategory, setExcludeCategory] = useState<string>("");
-    const [useSuggestFollowupQuestions, setUseSuggestFollowupQuestions] = useState<boolean>(false);
+    const [useSuggestFollowupQuestions, setUseSuggestFollowupQuestions] = useState<boolean>(true);
     const [vectorFieldList, setVectorFieldList] = useState<VectorFieldOptions[]>([VectorFieldOptions.Embedding]);
     const [useOidSecurityFilter, setUseOidSecurityFilter] = useState<boolean>(false);
     const [useGroupsSecurityFilter, setUseGroupsSecurityFilter] = useState<boolean>(false);
@@ -77,6 +89,9 @@ const Chat = () => {
     const [showUserUpload, setShowUserUpload] = useState<boolean>(false);
     const [showSpeechInput, setShowSpeechInput] = useState<boolean>(false);
     const [showSpeechOutput, setShowSpeechOutput] = useState<boolean>(false);
+    const [processMessages, setProcessMessages] = useState<messageStatus>(messageStatus.NotRunning)
+    const [messages, setMessages] = useState<ResponseMessage[]>([])
+
 
     const getConfig = async () => {
         configApi().then(config => {
@@ -151,8 +166,41 @@ const Chat = () => {
     };
 
     const client = useLogin ? useMsal().instance : undefined;
+      let assistantMessage = {} as ResponseMessage 
+    let toolMessage = {} as ResponseMessage
+    let assistantContent = ''
 
-    const makeApiRequest = async (question: string, conversation_id?: string) => {
+      const processResultMessage = (resultMessage: ResponseMessage, userMessage: ResponseMessage, conversationId?: string) => {
+        if (resultMessage.role === ASSISTANT) {
+          assistantContent += resultMessage.content
+          assistantMessage = resultMessage
+          assistantMessage.content = assistantContent
+
+          if (resultMessage.content) {
+            toolMessage = {
+              id: uuid(),
+              role: TOOL,
+              content: resultMessage.content,
+              date: new Date().toISOString()
+            }
+          }
+        }
+
+        if (resultMessage.role === TOOL) toolMessage = resultMessage
+
+        if (!conversationId) {
+          isEmpty(toolMessage)
+            ? setMessages([...messages, userMessage, assistantMessage])
+            : setMessages([...messages, userMessage, toolMessage, assistantMessage])
+        } else {
+          isEmpty(toolMessage)
+            ? setMessages([...messages, assistantMessage])
+            : setMessages([...messages, toolMessage, assistantMessage])
+        }
+      }
+
+
+    const makeApiRequest = async (question: string, conversationId?: string) => {
         lastQuestionRef.current = question;
 
         error && setError(undefined);
@@ -163,56 +211,101 @@ const Chat = () => {
         const token = client ? await getToken(client) : undefined;
 
         try {
-            const messages: ResponseMessage[] = answers.flatMap(a => [
-                { 
-                    content: a[0],
-                    role: "user",
-                    id: uuid(),
-                    date: new Date().toISOString(),
-                },
-                {
-                    content: a[1].choices[0].message.content,
-                    role: "assistant",
-                    id: a[1].choices[0].message.id || uuid(),
-                    date: a[1].choices[0].message.date || new Date().toISOString(),
-                }
-            ]);
-
-            const request: ChatAppRequest = {
-                messages: [...messages, {
-                    content: question,
-                    role: "user",
-                    id: uuid(),
-                    date: new Date().toISOString(),
-                }],
-                id: uuid(),
-                date: new Date().toISOString(),
-                title: "Chat",
-                stream: shouldStream,
-                context: {
-                    overrides: {
-                        prompt_template: promptTemplate.length === 0 ? undefined : promptTemplate,
-                        exclude_category: excludeCategory.length === 0 ? undefined : excludeCategory,
-                        top: retrieveCount,
-                        temperature: temperature,
-                        minimum_reranker_score: minimumRerankerScore,
-                        minimum_search_score: minimumSearchScore,
-                        retrieval_mode: retrievalMode,
-                        semantic_ranker: useSemanticRanker,
-                        semantic_captions: useSemanticCaptions,
-                        suggest_followup_questions: useSuggestFollowupQuestions,
-                        use_oid_security_filter: useOidSecurityFilter,
-                        use_groups_security_filter: useGroupsSecurityFilter,
-                        vector_fields: vectorFieldList,
-                        use_gpt4v: useGPT4V,
-                        gpt4v_input: gpt4vInput
+            setMessages(
+                [
+                    ...messages, 
+                    ...answers.flatMap(a => [
+                    { 
+                        content: a[0],
+                        role: "user",
+                        id: uuid(),
+                        date: new Date().toISOString(),
+                    },
+                    {
+                        content: a[1].choices[0].message.content,
+                        role: "assistant",
+                        id: a[1].choices[0].message.id || uuid(),
+                        date: a[1].choices[0].message.date || new Date().toISOString(),
                     }
-                },
-                // ChatAppProtocol: Client must pass on any session state received from the server
-                session_state: answers.length ? answers[answers.length - 1][1].choices[0].session_state : null
+                ]),
+                ]
+            )
+
+            const userMessage: ResponseMessage = {
+              id: uuid(),
+              role: 'user',
+              content: question,
+              date: new Date().toISOString()
+            }
+
+
+
+            let request: ChatAppRequest | null | undefined
+            if (!conversationId) {
+                request = {
+                    id: conversationId ?? uuid(),
+                    title: "Chat",
+                    messages: [userMessage],
+                    date: new Date().toISOString(),
+                    stream: shouldStream,
+                    context: {
+                        overrides: {
+                            prompt_template: promptTemplate.length === 0 ? undefined : promptTemplate,
+                            exclude_category: excludeCategory.length === 0 ? undefined : excludeCategory,
+                            top: retrieveCount,
+                            temperature: temperature,
+                            minimum_reranker_score: minimumRerankerScore,
+                            minimum_search_score: minimumSearchScore,
+                            retrieval_mode: retrievalMode,
+                            semantic_ranker: useSemanticRanker,
+                            semantic_captions: useSemanticCaptions,
+                            suggest_followup_questions: useSuggestFollowupQuestions,
+                            use_oid_security_filter: useOidSecurityFilter,
+                            use_groups_security_filter: useGroupsSecurityFilter,
+                            vector_fields: vectorFieldList,
+                            use_gpt4v: useGPT4V,
+                            gpt4v_input: gpt4vInput
+                        },
+                    },
+                    session_state: answers.length ? answers[answers.length - 1][1].choices[0].session_state : null
+                }
+            } else {
+                request = {
+                    messages: [...messages, userMessage],
+                    id: conversationId,
+                    date: new Date().toISOString(),
+                    title: "Chat",
+                    stream: shouldStream,
+                    context: {
+                        overrides: {
+                            prompt_template: promptTemplate.length === 0 ? undefined : promptTemplate,
+                            exclude_category: excludeCategory.length === 0 ? undefined : excludeCategory,
+                            top: retrieveCount,
+                            temperature: temperature,
+                            minimum_reranker_score: minimumRerankerScore,
+                            minimum_search_score: minimumSearchScore,
+                            retrieval_mode: retrievalMode,
+                            semantic_ranker: useSemanticRanker,
+                            semantic_captions: useSemanticCaptions,
+                            suggest_followup_questions: useSuggestFollowupQuestions,
+                            use_oid_security_filter: useOidSecurityFilter,
+                            use_groups_security_filter: useGroupsSecurityFilter,
+                            vector_fields: vectorFieldList,
+                            use_gpt4v: useGPT4V,
+                            gpt4v_input: gpt4vInput
+                        }
+                    },
+                    // ChatAppProtocol: Client must pass on any session state received from the server
+                    session_state: answers.length ? answers[answers.length - 1][1].choices[0].session_state : null
+                }
             };
+            console.log('request: ', request)
+            appStateContext?.dispatch({ type: 'UPDATE_CURRENT_CHAT', payload: request })
+            setMessages(request.messages);
 
             const response = await chatApi(request, token);
+
+            setProcessMessages(messageStatus.Processing)
             if (!response.body) {
                 throw Error("No response body");
             }
@@ -222,7 +315,15 @@ const Chat = () => {
                     answers,
                     response.body,
                 );
+                // I need to extract messages from parsed response and save them to the messages state
+                parsedResponse.choices.forEach(resultObj => {
+                    processResultMessage(resultObj.message, userMessage, conversationId)
+                })
+
                 setAnswers([...answers, [question, parsedResponse]]);
+                request.messages.push(toolMessage, assistantMessage)
+                appStateContext?.dispatch({ type: 'UPDATE_CURRENT_CHAT', payload: request })
+                setMessages([...messages, toolMessage, assistantMessage])
             } else {
                 const parsedResponse: ChatAppResponseOrError = await response.json();
                 if (response.status > 299 || !response.ok) {
@@ -234,6 +335,7 @@ const Chat = () => {
             setError(e);
         } finally {
             setIsLoading(false);
+            setProcessMessages(messageStatus.Done);
         }
     };
 
@@ -319,8 +421,8 @@ const Chat = () => {
         setUseGroupsSecurityFilter(!!checked);
     };
 
-    const onExampleClicked = (example: string) => {
-        makeApiRequest(example);
+    const onExampleClicked = (example: string, id?: string) => {
+        makeApiRequest(example, id);
     };
 
     const onShowCitation = (citation: string, index: number) => {
@@ -344,6 +446,63 @@ const Chat = () => {
         setSelectedAnswer(index);
     };
 
+    useLayoutEffect(() => {
+        console.log('useLayoutEffect triggered');
+        const saveToDB = async (messages: ResponseMessage[], id: string) => {
+          const response = await historyUpdate(messages, id)
+          return response
+        }
+
+        if (appStateContext && appStateContext.state.currentChat && processMessages === messageStatus.Done) {
+          if (appStateContext.state.isCosmosDBAvailable.cosmosDB) {
+            if (!appStateContext?.state.currentChat?.messages) {
+              console.error('Failure fetching current chat state.')
+              return
+            }
+            const noContentError = appStateContext.state.currentChat.messages.find(m => m.role === ERROR)
+
+            if (!noContentError?.content.includes(NO_CONTENT_ERROR)) {
+              saveToDB(appStateContext.state.currentChat.messages, appStateContext.state.currentChat.id)
+                .then(res => {
+                  if (!res.ok) {
+                    let errorMessage =
+                      "An error occurred. Answers can't be saved at this time. If the problem persists, please contact the site administrator."
+                    let errorChatMsg: ResponseMessage = {
+                      id: uuid(),
+                      role: ERROR,
+                      content: errorMessage,
+                      date: new Date().toISOString()
+                    }
+                    if (!appStateContext?.state.currentChat?.messages) {
+                      let err: Error = {
+                        ...new Error(),
+                        message: 'Failure fetching current chat state.'
+                      }
+                      throw err
+                    }
+                    setMessages([...appStateContext?.state.currentChat?.messages, errorChatMsg])
+                  }
+                  return res as Response
+                })
+                .catch(err => {
+                  console.error('Error: ', err)
+                  let errRes: Response = {
+                    ...new Response(),
+                    ok: false,
+                    status: 500
+                  }
+                  return errRes
+                })
+            }
+          } // ToDo: update the else statement to handle the case where CosmosDB is not available
+
+          appStateContext?.dispatch({ type: 'UPDATE_CHAT_HISTORY', payload: appStateContext.state.currentChat })
+          setMessages(appStateContext.state.currentChat.messages)
+          setProcessMessages(messageStatus.NotRunning)
+        }
+    }, [processMessages])
+
+
     return (
         <div className={styles.container}>
             <div className={styles.commandsContainer}>
@@ -364,7 +523,13 @@ const Chat = () => {
                             />
                             <h1 className={styles.chatEmptyStateTitle}>ChatPharma</h1>
                             <h2 className={styles.chatEmptyStateSubtitle}>I can help you with drug development or approval processes.</h2>
-                            <ExampleList onExampleClicked={onExampleClicked} useGPT4V={useGPT4V} />
+                            <ExampleList
+                                onExampleClicked={onExampleClicked}
+                                useGPT4V={useGPT4V}
+                                conversationId={
+                                    appStateContext?.state.currentChat?.id ? appStateContext?.state.currentChat?.id : undefined
+                                }
+                            />
                         </div>
                     ) : (
                         <div className={styles.chatMessageStream}>
@@ -381,10 +546,13 @@ const Chat = () => {
                                                 onCitationClicked={c => onShowCitation(c, index)}
                                                 onThoughtProcessClicked={() => onToggleTab(AnalysisPanelTabs.ThoughtProcessTab, index)}
                                                 onSupportingContentClicked={() => onToggleTab(AnalysisPanelTabs.SupportingContentTab, index)}
-                                                onFollowupQuestionClicked={q => makeApiRequest(q)}
+                                                onFollowupQuestionClicked={(q, id) => makeApiRequest(q, id)}
                                                 showFollowupQuestions={useSuggestFollowupQuestions && answers.length - 1 === index}
                                                 showSpeechOutput={showSpeechOutput}
                                                 speechUrl={speechUrls[index]}
+                                                conversationId={
+                                                          appStateContext?.state.currentChat?.id ? appStateContext?.state.currentChat?.id : undefined
+                                                }
                                             />
                                         </div>
                                     </div>
@@ -402,10 +570,13 @@ const Chat = () => {
                                                 onCitationClicked={c => onShowCitation(c, index)}
                                                 onThoughtProcessClicked={() => onToggleTab(AnalysisPanelTabs.ThoughtProcessTab, index)}
                                                 onSupportingContentClicked={() => onToggleTab(AnalysisPanelTabs.SupportingContentTab, index)}
-                                                onFollowupQuestionClicked={q => makeApiRequest(q)}
+                                                onFollowupQuestionClicked={(q, id) => makeApiRequest(q, id)}
                                                 showFollowupQuestions={useSuggestFollowupQuestions && answers.length - 1 === index}
                                                 showSpeechOutput={showSpeechOutput}
                                                 speechUrl={speechUrls[index]}
+                                                conversationId={
+                                                    appStateContext?.state.currentChat?.id ? appStateContext?.state.currentChat?.id : undefined 
+                                                }
                                             />
                                         </div>
                                     </div>

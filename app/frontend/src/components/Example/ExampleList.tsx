@@ -1,5 +1,5 @@
+import React from "react";
 import { Example } from "./Example";
-
 import styles from "./Example.module.css";
 
 const DEFAULT_EXAMPLES: string[] = [
@@ -15,18 +15,20 @@ const GPT4V_EXAMPLES: string[] = [
 ];
 
 interface Props {
-    onExampleClicked: (value: string) => void;
+    onExampleClicked: (value: string, id?: string) => void;
     useGPT4V?: boolean;
+    conversationId?: string;
 }
 
-export const ExampleList = ({ onExampleClicked, useGPT4V }: Props) => {
+export const ExampleList = ({ onExampleClicked, useGPT4V, conversationId }: Props) => {
     return (
         <ul className={styles.examplesNavList}>
             {(useGPT4V ? GPT4V_EXAMPLES : DEFAULT_EXAMPLES).map((question, i) => (
                 <li key={i}>
-                    <Example text={question} value={question} onClick={onExampleClicked} />
+                    <Example text={question} value={question} onClick={(value) => onExampleClicked(value, conversationId)} />
                 </li>
             ))}
         </ul>
     );
 };
+

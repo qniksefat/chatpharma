@@ -1,0 +1,11 @@
+data/*
+app/frontend/node_modules/*
+.venv/*
+.DS_Store
+app/backend/static/assets/*
+scripts/__pycache__/*
+app/backend/__pycache__/*
+app/backend/prepdocslib/__pycache__/*
+app/backend/core/__pycache__/*
+app/backend/approaches/__pycache__/*
+data/.DS_Store
