@@ -27,6 +27,7 @@ class ChatReadRetrieveReadApproach(ChatApproach):
         self,
         *,
         search_client: SearchClient,
+        search_client_drug: SearchClient,
         auth_helper: AuthenticationHelper,
         openai_client: AsyncOpenAI,
         chatgpt_model: str,
@@ -40,6 +41,7 @@ class ChatReadRetrieveReadApproach(ChatApproach):
         query_speller: str,
     ):
         self.search_client = search_client
+        self.search_client_drug = search_client_drug
         self.openai_client = openai_client
         self.auth_helper = auth_helper
         self.chatgpt_model = chatgpt_model

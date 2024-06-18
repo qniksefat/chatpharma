@@ -41,13 +41,14 @@ from approaches.chatreadretrieveread import ChatReadRetrieveReadApproach
 from config import (
     CONFIG_AUTH_CLIENT,
     CONFIG_BLOB_CONTAINER_CLIENT,
+    CONFIG_BLOB_CONTAINER_DRUG_CLIENT,
     CONFIG_CHAT_APPROACH,
     CONFIG_OPENAI_CLIENT,
     CONFIG_SEARCH_CLIENT,
+    CONFIG_SEARCH_CLIENT_DRUG,
     CONFIG_SEMANTIC_RANKER_DEPLOYED,
-    CONFIG_SPEECH_INPUT_ENABLED,
-    CONFIG_SPEECH_OUTPUT_ENABLED,
     CONFIG_VECTOR_SEARCH_ENABLED,
+    CONFIG_LIST_OF_DRUG_FILES,
 )
 from core.authentication import AuthenticationHelper
 from decorators import authenticated, authenticated_path
@@ -97,7 +98,17 @@ async def content_file(path: str, auth_claims: Dict[str, Any]):
         path_parts = path.rsplit("#page=", 1)
         path = path_parts[0]
     logging.info("Opening file %s", path)
-    blob_container_client: ContainerClient = current_app.config[CONFIG_BLOB_CONTAINER_CLIENT]
+    
+    # Remove page number from path, filename-1.txt -> filename.txt
+    if "-" in path:     path = path.split("-")[0] + ".pdf"
+    
+    if path in current_app.config[CONFIG_LIST_OF_DRUG_FILES]:
+        logging.info("Requested file is a drug file")
+        path = path.split(".pdf")[0] + "-0.pdf"
+        blob_container_client: ContainerClient = current_app.config[CONFIG_BLOB_CONTAINER_DRUG_CLIENT]
+    else:
+        logging.info("Requested file is a general file")
+        blob_container_client: ContainerClient = current_app.config[CONFIG_BLOB_CONTAINER_CLIENT]
     blob: Union[BlobDownloader, DatalakeDownloader]
     try:
         blob = await blob_container_client.get_blob_client(path).download_blob()
@@ -173,8 +184,6 @@ def config():
         {
             "showSemanticRankerOption": current_app.config[CONFIG_SEMANTIC_RANKER_DEPLOYED],
             "showVectorOption": current_app.config[CONFIG_VECTOR_SEARCH_ENABLED],
-            "showSpeechInput": current_app.config[CONFIG_SPEECH_INPUT_ENABLED],
-            "showSpeechOutput": current_app.config[CONFIG_SPEECH_OUTPUT_ENABLED],
         }
     )
 
@@ -184,8 +193,10 @@ async def setup_clients():
     # Replace these with your own values, either in environment variables or directly here
     AZURE_STORAGE_ACCOUNT = os.environ["AZURE_STORAGE_ACCOUNT"]
     AZURE_STORAGE_CONTAINER = os.environ["AZURE_STORAGE_CONTAINER"]
+    AZURE_STORAGE_CONTAINER_DRUG = os.environ["AZURE_STORAGE_CONTAINER_DRUG"]
     AZURE_SEARCH_SERVICE = os.environ["AZURE_SEARCH_SERVICE"]
     AZURE_SEARCH_INDEX = os.environ["AZURE_SEARCH_INDEX"]
+    AZURE_SEARCH_INDEX_DRUG = os.environ["AZURE_SEARCH_INDEX_DRUG"]
     # Shared by all OpenAI deployments
     OPENAI_HOST = os.getenv("OPENAI_HOST", "azure")
     OPENAI_CHATGPT_MODEL = os.environ["AZURE_OPENAI_CHATGPT_MODEL"]
@@ -230,9 +241,17 @@ async def setup_clients():
         index_name=AZURE_SEARCH_INDEX,
         credential=azure_credential,
     )
+    search_client_drug = SearchClient(
+        endpoint=f"https://{AZURE_SEARCH_SERVICE}.search.windows.net",
+        index_name=AZURE_SEARCH_INDEX_DRUG,
+        credential=azure_credential,
+    )
 
     blob_container_client = ContainerClient(
         f"https://{AZURE_STORAGE_ACCOUNT}.blob.core.windows.net", AZURE_STORAGE_CONTAINER, credential=azure_credential
+    )
+    blob_container_drug_client = ContainerClient(
+        f"https://{AZURE_STORAGE_ACCOUNT}.blob.core.windows.net", AZURE_STORAGE_CONTAINER_DRUG, credential=azure_credential
     )
 
     # Set up authentication helper
@@ -287,7 +306,9 @@ async def setup_clients():
 
     current_app.config[CONFIG_OPENAI_CLIENT] = openai_client
     current_app.config[CONFIG_SEARCH_CLIENT] = search_client
+    current_app.config[CONFIG_SEARCH_CLIENT_DRUG] = search_client_drug
     current_app.config[CONFIG_BLOB_CONTAINER_CLIENT] = blob_container_client
+    current_app.config[CONFIG_BLOB_CONTAINER_DRUG_CLIENT] = blob_container_drug_client
     current_app.config[CONFIG_AUTH_CLIENT] = auth_helper
 
     current_app.config[CONFIG_SEMANTIC_RANKER_DEPLOYED] = AZURE_SEARCH_SEMANTIC_RANKER != "disabled"
@@ -297,6 +318,7 @@ async def setup_clients():
     # or some derivative, here we include several for exploration purposes
     current_app.config[CONFIG_CHAT_APPROACH] = ChatReadRetrieveReadApproach(
         search_client=search_client,
+        search_client_drug=search_client_drug,
         openai_client=openai_client,
         auth_helper=auth_helper,
         chatgpt_model=OPENAI_CHATGPT_MODEL,
@@ -309,11 +331,16 @@ async def setup_clients():
         query_language=AZURE_SEARCH_QUERY_LANGUAGE,
         query_speller=AZURE_SEARCH_QUERY_SPELLER,
     )
+    with open("nda_files.txt", "r") as f:
+        nda_files = f.read().split("\n")
+    current_app.config[CONFIG_LIST_OF_DRUG_FILES] = nda_files
 
 @bp.after_app_serving
 async def close_clients():
     await current_app.config[CONFIG_SEARCH_CLIENT].close()
+    await current_app.config[CONFIG_SEARCH_CLIENT_DRUG].close()
     await current_app.config[CONFIG_BLOB_CONTAINER_CLIENT].close()
+    await current_app.config[CONFIG_BLOB_CONTAINER_DRUG_CLIENT].close()
 
 
 def create_app():

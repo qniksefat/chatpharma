@@ -95,6 +95,7 @@ class Approach(ABC):
     def __init__(
         self,
         search_client: SearchClient,
+        search_client_drug: SearchClient,
         openai_client: AsyncOpenAI,
         auth_helper: AuthenticationHelper,
         query_language: Optional[str],
@@ -107,6 +108,7 @@ class Approach(ABC):
         vision_token_provider: Callable[[], Awaitable[str]],
     ):
         self.search_client = search_client
+        self.search_client_drug = search_client_drug
         self.openai_client = openai_client
         self.auth_helper = auth_helper
         self.query_language = query_language
@@ -117,6 +119,16 @@ class Approach(ABC):
         self.openai_host = openai_host
         self.vision_endpoint = vision_endpoint
         self.vision_token_provider = vision_token_provider
+
+    @staticmethod
+    def is_drug_related_query(query_text: Optional[str]) -> bool:
+        if not query_text:
+            return False
+        drug_related_keywords = [
+            "drug",
+        ]
+        query_text_lower = query_text.lower()
+        return any(keyword in query_text_lower for keyword in drug_related_keywords)
 
     def build_filter(self, overrides: dict[str, Any], auth_claims: dict[str, Any]) -> Optional[str]:
         exclude_category = overrides.get("exclude_category")
@@ -140,8 +152,15 @@ class Approach(ABC):
         minimum_reranker_score: Optional[float],
     ) -> List[Document]:
         # Use semantic ranker if requested and if retrieval mode is text or hybrid (vectors + text)
+        print(f"Query text: {query_text}")
+        current_search_client = self.search_client_drug if self.is_drug_related_query(query_text) else self.search_client
+        if self.is_drug_related_query(query_text):
+            print("Using drug search client")
+        else:
+            print("Using non-drug search client")
+        
         if use_semantic_ranker and query_text:
-            results = await self.search_client.search(
+            results = await current_search_client.search(
                 search_text=query_text,
                 filter=filter,
                 query_type=QueryType.SEMANTIC,
@@ -153,7 +172,7 @@ class Approach(ABC):
                 vector_queries=vectors,
             )
         else:
-            results = await self.search_client.search(
+            results = await current_search_client.search(
                 search_text=query_text or "", filter=filter, top=top, vector_queries=vectors
             )
 
