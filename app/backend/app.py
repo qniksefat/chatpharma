@@ -4,17 +4,9 @@ import json
 import logging
 import mimetypes
 import os
-import time
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Union, cast
 
-from azure.cognitiveservices.speech import (
-    ResultReason,
-    SpeechConfig,
-    SpeechSynthesisOutputFormat,
-    SpeechSynthesisResult,
-    SpeechSynthesizer,
-)
 from azure.core.exceptions import ResourceNotFoundError
 from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider
 from azure.monitor.opentelemetry import configure_azure_monitor
@@ -46,41 +38,20 @@ from quart_cors import cors
 
 from approaches.approach import Approach
 from approaches.chatreadretrieveread import ChatReadRetrieveReadApproach
-from approaches.retrievethenread import RetrieveThenReadApproach
 from config import (
-    CONFIG_ASK_APPROACH,
-    CONFIG_ASK_VISION_APPROACH,
     CONFIG_AUTH_CLIENT,
     CONFIG_BLOB_CONTAINER_CLIENT,
     CONFIG_CHAT_APPROACH,
-    CONFIG_CHAT_VISION_APPROACH,
-    CONFIG_CREDENTIAL,
-    CONFIG_GPT4V_DEPLOYED,
-    CONFIG_INGESTER,
     CONFIG_OPENAI_CLIENT,
     CONFIG_SEARCH_CLIENT,
     CONFIG_SEMANTIC_RANKER_DEPLOYED,
     CONFIG_SPEECH_INPUT_ENABLED,
     CONFIG_SPEECH_OUTPUT_ENABLED,
-    CONFIG_SPEECH_SERVICE_ID,
-    CONFIG_SPEECH_SERVICE_LOCATION,
-    CONFIG_SPEECH_SERVICE_TOKEN,
-    CONFIG_SPEECH_SERVICE_VOICE,
-    CONFIG_USER_BLOB_CONTAINER_CLIENT,
-    CONFIG_USER_UPLOAD_ENABLED,
     CONFIG_VECTOR_SEARCH_ENABLED,
 )
 from core.authentication import AuthenticationHelper
 from decorators import authenticated, authenticated_path
 from error import error_dict, error_response
-from prepdocs import (
-    clean_key_if_exists,
-    setup_embeddings_service,
-    setup_file_processors,
-    setup_search_info,
-)
-from prepdocslib.filestrategy import UploadUserFileStrategy
-from prepdocslib.listfilestrategy import File
 
 bp = Blueprint("routes", __name__, static_folder="static")
 # Fix Windows registry issue with mimetypes
@@ -132,18 +103,7 @@ async def content_file(path: str, auth_claims: Dict[str, Any]):
         blob = await blob_container_client.get_blob_client(path).download_blob()
     except ResourceNotFoundError:
         logging.info("Path not found in general Blob container: %s", path)
-        if current_app.config[CONFIG_USER_UPLOAD_ENABLED]:
-            try:
-                user_oid = auth_claims["oid"]
-                user_blob_container_client = current_app.config[CONFIG_USER_BLOB_CONTAINER_CLIENT]
-                user_directory_client: FileSystemClient = user_blob_container_client.get_directory_client(user_oid)
-                file_client = user_directory_client.get_file_client(path)
-                blob = await file_client.download_file()
-            except ResourceNotFoundError:
-                logging.exception("Path not found in DataLake: %s", path)
-                abort(404)
-        else:
-            abort(404)
+        abort(404)
     if not blob.properties or not blob.properties.has_key("content_settings"):
         abort(404)
     mime_type = blob.properties["content_settings"]["content_type"]
@@ -153,29 +113,6 @@ async def content_file(path: str, auth_claims: Dict[str, Any]):
     await blob.readinto(blob_file)
     blob_file.seek(0)
     return await send_file(blob_file, mimetype=mime_type, as_attachment=False, attachment_filename=path)
-
-
-@bp.route("/ask", methods=["POST"])
-@authenticated
-async def ask(auth_claims: Dict[str, Any]):
-    if not request.is_json:
-        return jsonify({"error": "request must be json"}), 415
-    request_json = await request.get_json()
-    context = request_json.get("context", {})
-    context["auth_claims"] = auth_claims
-    try:
-        use_gpt4v = context.get("overrides", {}).get("use_gpt4v", False)
-        approach: Approach
-        if use_gpt4v and CONFIG_ASK_VISION_APPROACH in current_app.config:
-            approach = cast(Approach, current_app.config[CONFIG_ASK_VISION_APPROACH])
-        else:
-            approach = cast(Approach, current_app.config[CONFIG_ASK_APPROACH])
-        r = await approach.run(
-            request_json["messages"], context=context, session_state=request_json.get("session_state")
-        )
-        return jsonify(r)
-    except Exception as error:
-        return error_response(error, "/ask")
 
 
 class JSONEncoder(json.JSONEncoder):
@@ -203,12 +140,8 @@ async def chat(auth_claims: Dict[str, Any]):
     context = request_json.get("context", {})
     context["auth_claims"] = auth_claims
     try:
-        use_gpt4v = context.get("overrides", {}).get("use_gpt4v", False)
         approach: Approach
-        if use_gpt4v and CONFIG_CHAT_VISION_APPROACH in current_app.config:
-            approach = cast(Approach, current_app.config[CONFIG_CHAT_VISION_APPROACH])
-        else:
-            approach = cast(Approach, current_app.config[CONFIG_CHAT_APPROACH])
+        approach = cast(Approach, current_app.config[CONFIG_CHAT_APPROACH])
 
         result = await approach.run(
             request_json["messages"],
@@ -238,118 +171,12 @@ def auth_setup():
 def config():
     return jsonify(
         {
-            "showGPT4VOptions": current_app.config[CONFIG_GPT4V_DEPLOYED],
             "showSemanticRankerOption": current_app.config[CONFIG_SEMANTIC_RANKER_DEPLOYED],
             "showVectorOption": current_app.config[CONFIG_VECTOR_SEARCH_ENABLED],
-            "showUserUpload": current_app.config[CONFIG_USER_UPLOAD_ENABLED],
             "showSpeechInput": current_app.config[CONFIG_SPEECH_INPUT_ENABLED],
             "showSpeechOutput": current_app.config[CONFIG_SPEECH_OUTPUT_ENABLED],
         }
     )
-
-
-@bp.route("/speech", methods=["POST"])
-async def speech():
-    if not request.is_json:
-        return jsonify({"error": "request must be json"}), 415
-
-    speech_token = current_app.config.get(CONFIG_SPEECH_SERVICE_TOKEN)
-    if speech_token is None or speech_token.expires_on < time.time() + 60:
-        speech_token = await current_app.config[CONFIG_CREDENTIAL].get_token(
-            "https://cognitiveservices.azure.com/.default"
-        )
-        current_app.config[CONFIG_SPEECH_SERVICE_TOKEN] = speech_token
-
-    request_json = await request.get_json()
-    text = request_json["text"]
-    try:
-        # Construct a token as described in documentation:
-        # https://learn.microsoft.com/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?pivots=programming-language-python
-        auth_token = (
-            "aad#"
-            + current_app.config[CONFIG_SPEECH_SERVICE_ID]
-            + "#"
-            + current_app.config[CONFIG_SPEECH_SERVICE_TOKEN].token
-        )
-        speech_config = SpeechConfig(auth_token=auth_token, region=current_app.config[CONFIG_SPEECH_SERVICE_LOCATION])
-        speech_config.speech_synthesis_voice_name = current_app.config[CONFIG_SPEECH_SERVICE_VOICE]
-        speech_config.speech_synthesis_output_format = SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3
-        synthesizer = SpeechSynthesizer(speech_config=speech_config, audio_config=None)
-        result: SpeechSynthesisResult = synthesizer.speak_text_async(text).get()
-        if result.reason == ResultReason.SynthesizingAudioCompleted:
-            return result.audio_data, 200, {"Content-Type": "audio/mp3"}
-        elif result.reason == ResultReason.Canceled:
-            cancellation_details = result.cancellation_details
-            current_app.logger.error(
-                "Speech synthesis canceled: %s %s", cancellation_details.reason, cancellation_details.error_details
-            )
-            raise Exception("Speech synthesis canceled. Check logs for details.")
-        else:
-            current_app.logger.error("Unexpected result reason: %s", result.reason)
-            raise Exception("Speech synthesis failed. Check logs for details.")
-    except Exception as e:
-        logging.exception("Exception in /speech")
-        return jsonify({"error": str(e)}), 500
-
-
-@bp.post("/upload")
-@authenticated
-async def upload(auth_claims: dict[str, Any]):
-    request_files = await request.files
-    if "file" not in request_files:
-        # If no files were included in the request, return an error response
-        return jsonify({"message": "No file part in the request", "status": "failed"}), 400
-
-    user_oid = auth_claims["oid"]
-    file = request_files.getlist("file")[0]
-    user_blob_container_client: FileSystemClient = current_app.config[CONFIG_USER_BLOB_CONTAINER_CLIENT]
-    user_directory_client = user_blob_container_client.get_directory_client(user_oid)
-    try:
-        await user_directory_client.get_directory_properties()
-    except ResourceNotFoundError:
-        current_app.logger.info("Creating directory for user %s", user_oid)
-        await user_directory_client.create_directory()
-    await user_directory_client.set_access_control(owner=user_oid)
-    file_client = user_directory_client.get_file_client(file.filename)
-    file_io = file
-    file_io.name = file.filename
-    file_io = io.BufferedReader(file_io)
-    await file_client.upload_data(file_io, overwrite=True, metadata={"UploadedBy": user_oid})
-    file_io.seek(0)
-    ingester: UploadUserFileStrategy = current_app.config[CONFIG_INGESTER]
-    await ingester.add_file(File(content=file_io, acls={"oids": [user_oid]}, url=file_client.url))
-    return jsonify({"message": "File uploaded successfully"}), 200
-
-
-@bp.post("/delete_uploaded")
-@authenticated
-async def delete_uploaded(auth_claims: dict[str, Any]):
-    request_json = await request.get_json()
-    filename = request_json.get("filename")
-    user_oid = auth_claims["oid"]
-    user_blob_container_client: FileSystemClient = current_app.config[CONFIG_USER_BLOB_CONTAINER_CLIENT]
-    user_directory_client = user_blob_container_client.get_directory_client(user_oid)
-    file_client = user_directory_client.get_file_client(filename)
-    await file_client.delete_file()
-    ingester = current_app.config[CONFIG_INGESTER]
-    await ingester.remove_file(filename, user_oid)
-    return jsonify({"message": f"File {filename} deleted successfully"}), 200
-
-
-@bp.get("/list_uploaded")
-@authenticated
-async def list_uploaded(auth_claims: dict[str, Any]):
-    user_oid = auth_claims["oid"]
-    user_blob_container_client: FileSystemClient = current_app.config[CONFIG_USER_BLOB_CONTAINER_CLIENT]
-    files = []
-    try:
-        all_paths = user_blob_container_client.get_paths(path=user_oid)
-        async for path in all_paths:
-            files.append(path.name.split("/", 1)[1])
-    except ResourceNotFoundError as error:
-        if error.status_code != 404:
-            current_app.logger.exception("Error listing uploaded files", error)
-    return jsonify(files), 200
 
 
 @bp.before_app_serving
@@ -357,8 +184,6 @@ async def setup_clients():
     # Replace these with your own values, either in environment variables or directly here
     AZURE_STORAGE_ACCOUNT = os.environ["AZURE_STORAGE_ACCOUNT"]
     AZURE_STORAGE_CONTAINER = os.environ["AZURE_STORAGE_CONTAINER"]
-    AZURE_USERSTORAGE_ACCOUNT = os.environ.get("AZURE_USERSTORAGE_ACCOUNT")
-    AZURE_USERSTORAGE_CONTAINER = os.environ.get("AZURE_USERSTORAGE_CONTAINER")
     AZURE_SEARCH_SERVICE = os.environ["AZURE_SEARCH_SERVICE"]
     AZURE_SEARCH_INDEX = os.environ["AZURE_SEARCH_INDEX"]
     # Shared by all OpenAI deployments
@@ -368,13 +193,10 @@ async def setup_clients():
     OPENAI_EMB_DIMENSIONS = int(os.getenv("AZURE_OPENAI_EMB_DIMENSIONS", 1536))
     # Used with Azure OpenAI deployments
     AZURE_OPENAI_SERVICE = os.getenv("AZURE_OPENAI_SERVICE")
-    AZURE_OPENAI_GPT4V_DEPLOYMENT = os.environ.get("AZURE_OPENAI_GPT4V_DEPLOYMENT")
-    AZURE_OPENAI_GPT4V_MODEL = os.environ.get("AZURE_OPENAI_GPT4V_MODEL")
     AZURE_OPENAI_CHATGPT_DEPLOYMENT = (
         os.getenv("AZURE_OPENAI_CHATGPT_DEPLOYMENT") if OPENAI_HOST.startswith("azure") else None
     )
     AZURE_OPENAI_EMB_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMB_DEPLOYMENT") if OPENAI_HOST.startswith("azure") else None
-    AZURE_VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "")
     # Used only with non-Azure OpenAI deployments
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     OPENAI_ORGANIZATION = os.getenv("OPENAI_ORGANIZATION")
@@ -395,15 +217,6 @@ async def setup_clients():
     AZURE_SEARCH_QUERY_LANGUAGE = os.getenv("AZURE_SEARCH_QUERY_LANGUAGE", "en-us")
     AZURE_SEARCH_QUERY_SPELLER = os.getenv("AZURE_SEARCH_QUERY_SPELLER", "lexicon")
     AZURE_SEARCH_SEMANTIC_RANKER = os.getenv("AZURE_SEARCH_SEMANTIC_RANKER", "free").lower()
-
-    AZURE_SPEECH_SERVICE_ID = os.getenv("AZURE_SPEECH_SERVICE_ID")
-    AZURE_SPEECH_SERVICE_LOCATION = os.getenv("AZURE_SPEECH_SERVICE_LOCATION")
-    AZURE_SPEECH_VOICE = os.getenv("AZURE_SPEECH_VOICE", "en-US-AndrewMultilingualNeural")
-
-    USE_GPT4V = os.getenv("USE_GPT4V", "").lower() == "true"
-    USE_USER_UPLOAD = os.getenv("USE_USER_UPLOAD", "").lower() == "true"
-    USE_SPEECH_INPUT_BROWSER = os.getenv("USE_SPEECH_INPUT_BROWSER", "").lower() == "true"
-    USE_SPEECH_OUTPUT_AZURE = os.getenv("USE_SPEECH_OUTPUT_AZURE", "").lower() == "true"
 
     # Use the current user identity to authenticate with Azure OpenAI, AI Search and Blob Storage (no secrets needed,
     # just use 'az login' locally, and managed identity when deployed on Azure). If you need to use keys, use separate AzureKeyCredential instances with the
@@ -443,60 +256,8 @@ async def setup_clients():
         enable_unauthenticated_access=AZURE_ENABLE_UNAUTHENTICATED_ACCESS,
     )
 
-    if USE_USER_UPLOAD:
-        current_app.logger.info("USE_USER_UPLOAD is true, setting up user upload feature")
-        if not AZURE_USERSTORAGE_ACCOUNT or not AZURE_USERSTORAGE_CONTAINER:
-            raise ValueError(
-                "AZURE_USERSTORAGE_ACCOUNT and AZURE_USERSTORAGE_CONTAINER must be set when USE_USER_UPLOAD is true"
-            )
-        user_blob_container_client = FileSystemClient(
-            f"https://{AZURE_USERSTORAGE_ACCOUNT}.dfs.core.windows.net",
-            AZURE_USERSTORAGE_CONTAINER,
-            credential=azure_credential,
-        )
-        current_app.config[CONFIG_USER_BLOB_CONTAINER_CLIENT] = user_blob_container_client
-
-        # Set up ingester
-        file_processors = setup_file_processors(
-            azure_credential=azure_credential,
-            document_intelligence_service=os.getenv("AZURE_DOCUMENTINTELLIGENCE_SERVICE"),
-            local_pdf_parser=os.getenv("USE_LOCAL_PDF_PARSER", "").lower() == "true",
-            local_html_parser=os.getenv("USE_LOCAL_HTML_PARSER", "").lower() == "true",
-            search_images=USE_GPT4V,
-        )
-        search_info = await setup_search_info(
-            search_service=AZURE_SEARCH_SERVICE, index_name=AZURE_SEARCH_INDEX, azure_credential=azure_credential
-        )
-        text_embeddings_service = setup_embeddings_service(
-            azure_credential=azure_credential,
-            openai_host=OPENAI_HOST,
-            openai_model_name=OPENAI_EMB_MODEL,
-            openai_service=AZURE_OPENAI_SERVICE,
-            openai_deployment=AZURE_OPENAI_EMB_DEPLOYMENT,
-            openai_dimensions=OPENAI_EMB_DIMENSIONS,
-            openai_key=clean_key_if_exists(OPENAI_API_KEY),
-            openai_org=OPENAI_ORGANIZATION,
-            disable_vectors=os.getenv("USE_VECTORS", "").lower() == "false",
-        )
-        ingester = UploadUserFileStrategy(
-            search_info=search_info, embeddings=text_embeddings_service, file_processors=file_processors
-        )
-        current_app.config[CONFIG_INGESTER] = ingester
-
     # Used by the OpenAI SDK
     openai_client: AsyncOpenAI
-
-    if USE_SPEECH_OUTPUT_AZURE:
-        if not AZURE_SPEECH_SERVICE_ID or AZURE_SPEECH_SERVICE_ID == "":
-            raise ValueError("Azure speech resource not configured correctly, missing AZURE_SPEECH_SERVICE_ID")
-        if not AZURE_SPEECH_SERVICE_LOCATION or AZURE_SPEECH_SERVICE_LOCATION == "":
-            raise ValueError("Azure speech resource not configured correctly, missing AZURE_SPEECH_SERVICE_LOCATION")
-        current_app.config[CONFIG_SPEECH_SERVICE_ID] = AZURE_SPEECH_SERVICE_ID
-        current_app.config[CONFIG_SPEECH_SERVICE_LOCATION] = AZURE_SPEECH_SERVICE_LOCATION
-        current_app.config[CONFIG_SPEECH_SERVICE_VOICE] = AZURE_SPEECH_VOICE
-        # Wait until token is needed to fetch for the first time
-        current_app.config[CONFIG_SPEECH_SERVICE_TOKEN] = None
-        current_app.config[CONFIG_CREDENTIAL] = azure_credential
 
     if OPENAI_HOST.startswith("azure"):
         token_provider = get_bearer_token_provider(azure_credential, "https://cognitiveservices.azure.com/.default")
@@ -529,30 +290,11 @@ async def setup_clients():
     current_app.config[CONFIG_BLOB_CONTAINER_CLIENT] = blob_container_client
     current_app.config[CONFIG_AUTH_CLIENT] = auth_helper
 
-    current_app.config[CONFIG_GPT4V_DEPLOYED] = bool(USE_GPT4V)
     current_app.config[CONFIG_SEMANTIC_RANKER_DEPLOYED] = AZURE_SEARCH_SEMANTIC_RANKER != "disabled"
     current_app.config[CONFIG_VECTOR_SEARCH_ENABLED] = os.getenv("USE_VECTORS", "").lower() != "false"
-    current_app.config[CONFIG_USER_UPLOAD_ENABLED] = bool(USE_USER_UPLOAD)
-    current_app.config[CONFIG_SPEECH_INPUT_ENABLED] = USE_SPEECH_INPUT_BROWSER
-    current_app.config[CONFIG_SPEECH_OUTPUT_ENABLED] = USE_SPEECH_OUTPUT_AZURE
 
     # Various approaches to integrate GPT and external knowledge, most applications will use a single one of these patterns
     # or some derivative, here we include several for exploration purposes
-    current_app.config[CONFIG_ASK_APPROACH] = RetrieveThenReadApproach(
-        search_client=search_client,
-        openai_client=openai_client,
-        auth_helper=auth_helper,
-        chatgpt_model=OPENAI_CHATGPT_MODEL,
-        chatgpt_deployment=AZURE_OPENAI_CHATGPT_DEPLOYMENT,
-        embedding_model=OPENAI_EMB_MODEL,
-        embedding_deployment=AZURE_OPENAI_EMB_DEPLOYMENT,
-        embedding_dimensions=OPENAI_EMB_DIMENSIONS,
-        sourcepage_field=KB_FIELDS_SOURCEPAGE,
-        content_field=KB_FIELDS_CONTENT,
-        query_language=AZURE_SEARCH_QUERY_LANGUAGE,
-        query_speller=AZURE_SEARCH_QUERY_SPELLER,
-    )
-
     current_app.config[CONFIG_CHAT_APPROACH] = ChatReadRetrieveReadApproach(
         search_client=search_client,
         openai_client=openai_client,
@@ -572,8 +314,6 @@ async def setup_clients():
 async def close_clients():
     await current_app.config[CONFIG_SEARCH_CLIENT].close()
     await current_app.config[CONFIG_BLOB_CONTAINER_CLIENT].close()
-    if current_app.config.get(CONFIG_USER_BLOB_CONTAINER_CLIENT):
-        await current_app.config[CONFIG_USER_BLOB_CONTAINER_CLIENT].close()
 
 
 def create_app():
