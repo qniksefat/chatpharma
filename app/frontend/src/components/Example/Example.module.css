@@ -10,7 +10,8 @@
 
 .example {
     word-break: break-word;
-    background: #dbdbdb;
+    color: white;
+    background: -webkit-linear-gradient(left, #38b2ac, #4299e1);
     border-radius: 8px;
     display: flex;
     flex-direction: column;
