@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from "react";
 import { Checkbox, Panel, DefaultButton, TextField, SpinButton, Slider } from "@fluentui/react";
-import padana from "../../assets/padana-black.svg";
+import padana from "../../assets/padana-g2b.svg";
 import readNDJSONStream from "ndjson-readablestream";
 
 import styles from "./Chat.module.css";

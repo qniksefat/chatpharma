@@ -33,11 +33,21 @@
     font-weight: 600;
     margin-top: 0;
     margin-bottom: 30px;
+    background: -webkit-linear-gradient(left, #38b2ac, #4299e1);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 
 .chatEmptyStateSubtitle {
     font-weight: 600;
     margin-bottom: 10px;
+    color: #6b7280;
+}
+
+@media (prefers-color-scheme: dark) {
+    .chatEmptyStateSubtitle {
+        color: #9ca3af;
+    }
 }
 
 @media only screen and (max-height: 780px) {
