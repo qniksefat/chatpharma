@@ -5,8 +5,8 @@
 }
 
 .header {
-    background-color: #222222;
-    color: #f2f2f2;
+    background: linear-gradient(to left, #007BFF, #28A745);
+    color: #FFFFFF;
 }
 
 .headerContainer {
