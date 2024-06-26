@@ -42,7 +42,7 @@
 }
 
 .citation {
-    font-weight: 500;
+    font-weight: 600;
     line-height: 24px;
     text-align: center;
     border-radius: 4px;
@@ -73,8 +73,8 @@
     text-align: center;
     border-radius: 4px;
     padding: 0px 8px;
-    background: #e8ebfa;
-    color: black;
+    background: linear-gradient(90deg, #38b2ac, #4299e1);
+    color: white;
     text-decoration: none;
     cursor: pointer;
 }
